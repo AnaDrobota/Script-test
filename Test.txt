@@ -1,0 +1,227 @@
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import Select
+import time
+import random
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+
+import mysql.connector
+from mysql.connector import Error
+import ssl
+
+def complete_form(driver_url, nume, prenume, email, telefon, institutie, limba_tur_index, max_persons=40):
+    try:
+        # Crează un obiect de opțiuni pentru Chrome
+        options = Options()
+
+        # Calea către driver
+        driver_path = ChromeDriverManager().install()
+
+        # Creează un obiect Service cu driver-ul descărcat
+        service = Service(driver_path)
+
+        # Inițializează browser-ul Chrome
+        driver = webdriver.Chrome(service=service, options=options)
+
+        # Deschide pagina principală
+        driver.get(driver_url)
+        WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[data-id='biblioteca']")))
+
+        # Click pe butonul biblioteca
+        button = driver.find_element(By.CSS_SELECTOR, "button[data-id='biblioteca']")
+        driver.execute_script("arguments[0].scrollIntoView(true);", button)
+        time.sleep(1)
+        driver.execute_script("arguments[0].click();", button)
+
+        # Așteaptă să se încarce formularul
+        WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, "nume")))
+
+        # Completarea formularului
+        driver.find_element(By.ID, "nume").send_keys(nume)
+        driver.find_element(By.ID, "prenume").send_keys(prenume)
+        driver.find_element(By.ID, "email").send_keys(email)
+        driver.find_element(By.ID, "telefon").send_keys(telefon)
+        driver.find_element(By.ID, "institutie").send_keys(institutie)
+        time.sleep(1)
+
+        # Selectează limba turului
+        limba_tur = WebDriverWait(driver, 2).until(
+            EC.element_to_be_clickable((By.ID, "limba_tur"))
+        )
+        limba_tur.click()  # Click pe dropdown
+        time.sleep(0.5)
+
+        limba_options = driver.find_elements(By.CSS_SELECTOR, "#limba_tur option")
+        if limba_tur_index < len(limba_options):
+            limba_options[limba_tur_index].click()  # Selectează limba dorită
+        else:
+            print("Indexul pentru limba turului nu este valid.")
+            return
+
+        time.sleep(1)
+        # Selectează o categorie de bilete și numărul de participanți
+        ticket_categories = driver.find_elements(By.CSS_SELECTOR, "select.ddlTicketQuantity")
+        if ticket_categories:
+            selected_category = ticket_categories[2]  # selectează prima categorie
+            options = selected_category.find_elements(By.TAG_NAME, "option")
+
+            # Selectează numărul de persoane între 1 și max_persons
+            persons = random.randint(1, max_persons)  # Alege un număr aleatoriu de persoane
+            if len(options) > persons:
+                options[persons].click()
+                print(f"Selectat {persons} persoane dintr-o categorie.")
+            else:
+                print(f"Numărul maxim de persoane este {max_persons}. Alege un număr mai mic.")
+        else:
+            print("Nu există categorii de bilete disponibile.")
+            driver.quit()
+            return
+        time.sleep(1)
+
+        # Selectează o dată disponibilă din calendar
+        print("Selectăm o dată disponibilă...")
+
+        # Așteptăm să se încarce complet calendarul
+        calendar_grid = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".calendar-grid"))
+        )
+
+        # Căutăm o dată disponibilă în calendar
+        calendar_cells = driver.find_elements(By.CSS_SELECTOR, ".calendar-cell:not(.disabled)")
+        selected_day = None
+
+        # Căutăm o dată disponibilă care nu este "disabled" și nu este goală
+        for cell in calendar_cells:
+            if cell.text.strip():  # Verificăm dacă celula conține o dată
+                selected_day = cell
+                break  # Alegem prima dată disponibilă
+
+        if selected_day:
+            # Scroll pe ziua selectată pentru a te asigura că e vizibilă
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'})", selected_day)
+
+            # Așteaptă ca celula să devină clicabilă și nu este acoperită
+            WebDriverWait(driver, 5).until(EC.element_to_be_clickable(selected_day))
+
+            # Verifică dacă elementul de input de dată este activ și ascuns
+            input_date = driver.find_element(By.ID, "date")
+            if input_date.is_displayed():
+                driver.execute_script("arguments[0].click();", selected_day)  # Folosim JavaScript pentru click
+            else:
+                selected_day.click()  # Dacă este vizibil și interactiv, dăm clic normal
+
+            print(f"Data selectată: {selected_day.text}")
+        else:
+            print("Nu s-a găsit o dată disponibilă pentru astăzi.")
+            driver.quit()
+            return
+
+        time.sleep(2)  # Adăugăm mai mult timp pentru a se încărca complet
+
+        # Așteaptă intervalele orare să fie disponibile
+        print("Așteptăm intervalele orare...")
+        time_slot_select = WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located((By.ID, "timeSlot"))
+        )
+
+        # Verifică dacă sunt opțiuni disponibile
+        time_slots = Select(time_slot_select).options
+        if len(time_slots) > 1:
+            # Selectează un interval orar aleatoriu din opțiunile disponibile
+            random_choice = random.choice(time_slots[1:])  # Exclude prima opțiune goală
+            time_slot_select.click()
+            time_slot_select = Select(time_slot_select)  # Creăm obiectul Select din nou
+            time_slot_select.select_by_visible_text(random_choice.text)  # Selectăm intervalul orar
+            print(f"Intervalul orar selectat: {random_choice.text}")
+        else:
+            print("Nu există intervale orare disponibile pentru data selectată.")
+            driver.quit()
+            return
+
+        # Trimite formularul
+        submit_btn = driver.find_element(By.CSS_SELECTOR, "button#submitBtn")
+        driver.execute_script("arguments[0].scrollIntoView(true);", submit_btn)
+        time.sleep(1)
+
+        # Trimite formularul direct
+        #submit_btn.click()
+
+        # Așteaptă să se încarce mesajul de succes
+        WebDriverWait(driver, 2).until(EC.presence_of_element_located((By.XPATH, "//p[contains(text(),'Rezervarea a fost completată')]")))
+        print("Formularul a fost completat și trimis cu succes!")
+
+    except Exception as e:
+        print(f"A apărut o eroare: {e}")
+
+    finally:
+        input("Apasă Enter pentru a închide browserul...")
+        driver.quit()
+
+driver_url="http://visit.dev.tuiasi.ro"
+nume="test"
+prenume="test"
+email="anamaria.drobota20@gmail.com"
+telefon="+40712345678"
+institutie="Universitatea Tehnică"
+limba_tur_index=1
+max_persons=40
+
+# Apelarea funcției cu datele necesare
+complete_form(driver_url, nume, prenume, email, telefon, institutie, limba_tur_index, max_persons)
+
+
+def verify_in_database(host, user, password, database, table_name, column_name, value):
+    connection = None
+    try:
+        print("Începerea conexiunii la baza de date...")
+
+        connection = mysql.connector.connect(
+        host=host,
+        user=user,
+        password=password,
+        database=database,
+        ssl_disabled=True  # Dezactivează SSL
+        )   
+
+        
+
+        if connection.is_connected():
+            print("Conexiunea la baza de date a fost realizată cu succes!")
+            cursor = connection.cursor()
+            query = f"SELECT COUNT(*) FROM {table_name} WHERE {column_name} = %s"
+            cursor.execute(query, (value,))
+            result = cursor.fetchone()
+
+            if result and result[0] > 0:
+                print(f"Valoarea '{value}' există în baza de date.")
+                return True
+            else:
+                print(f"Valoarea '{value}' nu există în baza de date.")
+                return False
+
+    except mysql.connector.Error as e:
+        print(f"Eroare MySQL: {e}")
+        return False
+    except Exception as e:
+        print(f"A apărut o eroare neașteptată: {e}")
+        return False
+
+    finally:
+        if connection and connection.is_connected():
+            connection.close()
+            print("Conexiunea la baza de date a fost închisă.")
+
+
+
+# Exemplu de utilizare
+host = 'db.tuiasi.ro'  # De exemplu: 'localhost' sau IP-ul serverului
+
+table_name = 'user'  # Numele tabelului
+column_name = 'email'  # Coloana unde căutăm
+value = email  # Valoarea pe care vrem să o căutăm
+
+verify_in_database(host, user, password, database, table_name, column_name, value)
